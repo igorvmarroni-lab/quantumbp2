@@ -1,0 +1,158 @@
+"""
+Quantum Bayesian Network — Entangled Circuit (Arm Q1)
+=====================================================
+10-qubit parameterized circuit implementing do-calculus causal inference
+on IBM Quantum hardware (ibm_fez, Heron r2).
+
+Architecture:
+  Layer 1: Marginal initialization (RY rotations)
+  Layer 2: Treatment ← Confounders (Controlled-RY)
+  Layer 3: Outcome ← Treatment + Confounders
+  Layer 4: Entanglement (CNOT network) — PRESENT in this arm
+
+Requires: IBM Quantum account + ibmq token set via environment variable IBMQ_TOKEN
+"""
+
+import numpy as np
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit.circuit import Parameter
+from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2 as Sampler
+from qiskit_ibm_runtime import Options
+from scipy.optimize import minimize
+
+# ── Qubit mapping ────────────────────────────────────────────────────────────
+# q[0..6] = 7 confounders (age, sex, family_history, risk_score, distance, anxiety, comorbidity)
+# q[7]    = treatment (behavioral intervention)
+# q[8]    = outcome (BD-II conversion)
+# q[9]    = ancilla
+N_QUBITS = 10
+N_SHOTS  = 5000
+N_PARAMS = 42  # total trainable parameters
+
+
+def build_entangled_qbn(params: np.ndarray, do_treatment: int | None = None) -> QuantumCircuit:
+    """
+    Build the entangled QBN circuit.
+
+    Parameters
+    ----------
+    params       : array of trainable rotation angles (length N_PARAMS)
+    do_treatment : None = observational; 0 or 1 = do-calculus intervention
+                   (removes Layer 2 confounding edges, fixes treatment qubit)
+    """
+    qr = QuantumRegister(N_QUBITS, "q")
+    cr = ClassicalRegister(2, "c")   # measure treatment + outcome
+    qc = QuantumCircuit(qr, cr)
+
+    p = iter(params)
+
+    # ── Layer 1: Marginal initialization ─────────────────────────────────────
+    for i in range(N_QUBITS):
+        qc.ry(next(p), qr[i])
+
+    # ── Layer 2: Treatment ← Confounders (skip under do-calculus) ────────────
+    if do_treatment is None:
+        for conf in range(7):
+            qc.cry(next(p), qr[conf], qr[7])
+    else:
+        # Consume parameters without applying gates (do-operator: remove edges)
+        for _ in range(7):
+            next(p)
+        # Fix treatment assignment
+        if do_treatment == 1:
+            qc.x(qr[7])
+
+    # ── Layer 3: Outcome ← Treatment + Confounders ───────────────────────────
+    qc.cry(next(p), qr[7], qr[8])
+    for conf in range(7):
+        qc.cry(next(p), qr[conf], qr[8])
+
+    # ── Layer 4: Entanglement (CNOT network) ─────────────────────────────────
+    for i in range(N_QUBITS - 1):
+        qc.cx(qr[i], qr[i + 1])
+    qc.cx(qr[N_QUBITS - 1], qr[0])  # close the ring
+
+    # ── Measure treatment and outcome ────────────────────────────────────────
+    qc.measure(qr[7], cr[0])
+    qc.measure(qr[8], cr[1])
+
+    return qc
+
+
+def total_variation_distance(p_quantum: dict, p_empirical: dict) -> float:
+    """TVD = 0.5 * Σ |p_q(i) - p_e(i)|"""
+    keys = set(p_quantum) | set(p_empirical)
+    return 0.5 * sum(abs(p_quantum.get(k, 0) - p_empirical.get(k, 0)) for k in keys)
+
+
+def train(p_empirical: dict, backend, n_iter: int = 500, lr: float = 0.01) -> np.ndarray:
+    """
+    Train QBN parameters by minimizing TVD via parameter-shift rule.
+    Uses ADAM optimizer.
+    """
+    params = np.random.uniform(0, 2 * np.pi, N_PARAMS)
+    sampler = Sampler(backend)
+
+    def objective(p):
+        qc = build_entangled_qbn(p)
+        job = sampler.run([qc], shots=N_SHOTS)
+        counts = job.result()[0].data.c.get_counts()
+        total = sum(counts.values())
+        p_quantum = {k: v / total for k, v in counts.items()}
+        return total_variation_distance(p_quantum, p_empirical)
+
+    result = minimize(objective, params, method="adam", options={"maxiter": n_iter, "lr": lr})
+    return result.x
+
+
+def estimate_hr(trained_params, backend, n_bootstrap: int = 500) -> tuple:
+    """
+    Estimate Hazard Ratio using do-calculus on trained circuit.
+    Returns (HR_point, CI_lower, CI_upper).
+    """
+    sampler = Sampler(backend)
+
+    def p_conversion(do_t):
+        qc = build_entangled_qbn(trained_params, do_treatment=do_t)
+        job = sampler.run([qc], shots=N_SHOTS)
+        counts = job.result()[0].data.c.get_counts()
+        total = sum(counts.values())
+        # outcome qubit is cr[1]; count states where cr[1] == '1'
+        p_outcome = sum(v for k, v in counts.items() if k[0] == "1") / total
+        return p_outcome
+
+    p1 = p_conversion(1)  # P(conversion | do(T=1))
+    p0 = p_conversion(0)  # P(conversion | do(T=0))
+    hr = p1 / p0
+
+    # Bootstrap CI
+    hrs = []
+    for _ in range(n_bootstrap):
+        _p1 = p_conversion(1)
+        _p0 = p_conversion(0)
+        hrs.append(_p1 / _p0)
+    ci_low  = np.percentile(hrs, 2.5)
+    ci_high = np.percentile(hrs, 97.5)
+
+    return hr, ci_low, ci_high
+
+
+if __name__ == "__main__":
+    import os, json
+
+    # Load MEPS empirical joint distribution (pre-processed)
+    with open("../data/meps_joint_distribution.json") as f:
+        p_empirical = json.load(f)
+
+    # Connect to IBM Quantum
+    token = os.environ["IBMQ_TOKEN"]
+    service = QiskitRuntimeService(channel="ibm_quantum", token=token)
+    backend = service.backend("ibm_fez")
+
+    print("Training entangled QBN …")
+    trained_params = train(p_empirical, backend)
+    np.save("../results/trained_params_entangled.npy", trained_params)
+
+    print("Estimating HR via do-calculus …")
+    hr, ci_low, ci_high = estimate_hr(trained_params, backend)
+    print(f"Entangled QBN  HR = {hr:.3f}  95% CI: [{ci_low:.3f}, {ci_high:.3f}]")
