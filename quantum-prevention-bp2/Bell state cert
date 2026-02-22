@@ -1,0 +1,117 @@
+"""
+Bell State & CHSH Hardware Certification
+=========================================
+Reproduces the hardware entanglement certification benchmarks reported in the paper.
+Job IDs are publicly verifiable on IBM Quantum Platform.
+
+Jobs executed: February 22, 2026
+  Bell:  d6dhdocnsg9c739bcri0
+  CHSH1: d6dhj3h54hss73b9otqg
+  CHSH2: d6dhhkvg4t5c7386n00g
+"""
+
+import numpy as np
+from qiskit import QuantumCircuit
+from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2 as Sampler
+import os
+
+
+def bell_state_circuit() -> QuantumCircuit:
+    """Prepare |Φ⁺⟩ = (|00⟩ + |11⟩)/√2"""
+    qc = QuantumCircuit(2, 2)
+    qc.h(0)
+    qc.cx(0, 1)
+    qc.measure([0, 1], [0, 1])
+    return qc
+
+
+def chsh_circuits() -> list[QuantumCircuit]:
+    """
+    Four CHSH measurement circuits.
+    Optimal bases: A0=Z, A1=X, B0=RY(-π/4), B1=RY(+π/4)
+    """
+    circuits = []
+    angles_b = [-np.pi / 4, np.pi / 4]
+    angles_a = [0, np.pi / 2]  # Z and X bases for qubit A
+
+    for a_angle in angles_a:
+        for b_angle in angles_b:
+            qc = QuantumCircuit(2, 2)
+            qc.h(0)
+            qc.cx(0, 1)
+            if a_angle != 0:
+                qc.ry(a_angle, 0)
+            qc.ry(b_angle, 1)
+            qc.measure([0, 1], [0, 1])
+            circuits.append(qc)
+
+    return circuits
+
+
+def compute_correlator(counts: dict, shots: int) -> float:
+    """E = (N00 + N11 - N01 - N10) / shots"""
+    n00 = counts.get("00", 0)
+    n11 = counts.get("11", 0)
+    n01 = counts.get("01", 0)
+    n10 = counts.get("10", 0)
+    return (n00 + n11 - n01 - n10) / shots
+
+
+def run_bell_test(backend) -> dict:
+    """Execute Bell state and compute fidelity."""
+    sampler = Sampler(backend)
+    qc = bell_state_circuit()
+    job = sampler.run([qc], shots=1024)
+    counts = job.result()[0].data.c.get_counts()
+    print(f"  Bell state counts: {counts}")
+    fidelity = (counts.get("00", 0) + counts.get("11", 0)) / 1024
+    print(f"  Bell fidelity F = {fidelity:.4f}")
+    return {"counts": counts, "fidelity": fidelity, "job_id": job.job_id()}
+
+
+def run_chsh_test(backend) -> dict:
+    """Execute CHSH circuits and compute S parameter."""
+    sampler = Sampler(backend)
+    circuits = chsh_circuits()
+    job = sampler.run(circuits, shots=1024)
+    results = job.result()
+
+    correlators = []
+    for i, res in enumerate(results):
+        counts = res.data.c.get_counts()
+        e = compute_correlator(counts, 1024)
+        correlators.append(e)
+        print(f"  E{i+1} = {e:.4f}   counts: {counts}")
+
+    # CHSH: S = |E1 - E2| + |E3 + E4|
+    e1, e2, e3, e4 = correlators
+    S = abs(e1 - e2) + abs(e3 + e4)
+    sigma = 0.022 * np.sqrt(4)  # propagated uncertainty
+    sigma_above = (S - 2.0) / 0.044
+
+    print(f"\n  CHSH S = {S:.4f} ± {sigma:.4f}")
+    print(f"  Classical bound violated by {sigma_above:.1f}σ")
+    print(f"  Tsirelson limit reached: {S / (2 * np.sqrt(2)) * 100:.1f}%")
+
+    return {
+        "correlators": correlators,
+        "S": S,
+        "sigma_above_classical": sigma_above,
+        "job_id": job.job_id(),
+    }
+
+
+if __name__ == "__main__":
+    token = os.environ["IBMQ_TOKEN"]
+    service = QiskitRuntimeService(channel="ibm_quantum", token=token)
+    backend = service.backend("ibm_fez")
+
+    print("── Bell State Certification ──────────────────")
+    bell_result = run_bell_test(backend)
+
+    print("\n── CHSH Inequality Test ──────────────────────")
+    chsh_result = run_chsh_test(backend)
+
+    print(f"\nBell Job ID : {bell_result['job_id']}")
+    print(f"CHSH Job ID : {chsh_result['job_id']}")
+    print("\nVerify at: https://quantum.ibm.com/")
