@@ -1,0 +1,59 @@
+# IBM Quantum Job IDs — Hardware Certification
+
+All jobs executed on **IBM Quantum (ibm_fez, Heron r2)** on **February 22, 2026**.
+Publicly verifiable at https://quantum.ibm.com/ under the author's account.
+
+## Job Details
+
+### 1. Bell State Preparation
+- **Job ID:** `d6dhdocnsg9c739bcri0`
+- **Time:** 14:46:59–14:47:01 UTC
+- **Circuits:** 1 | **Shots:** 1,024
+- **Circuit:** |Φ⁺⟩ = (|00⟩ + |11⟩)/√2 via Hadamard + CNOT
+- **Results:**
+  - |00⟩: 509 counts
+  - |11⟩: 497 counts
+  - |01⟩: 10 counts (noise)
+  - |10⟩: 8 counts (noise)
+- **Fidelity:** F = P(00) + P(11) = **0.982**
+- **Note:** Residual errors (~1–2%) confirm real hardware execution, incompatible with ideal noiseless simulation.
+
+---
+
+### 2. CHSH Inequality Test (Primary)
+- **Job ID:** `d6dhj3h54hss73b9otqg`
+- **Circuits:** 4 | **Shots:** 1,024 per circuit | **Sampler:** V2
+- **Measurement bases:**
+  - A0 = Z, A1 = X
+  - B0 = RY(−π/4), B1 = RY(+π/4)
+- **Correlators** E = (N00 + N11 − N01 − N10) / 1024:
+  - E₁ ≈ 0.695
+  - E₂ ≈ 0.678
+  - E₃ ≈ 0.666
+  - E₄ ≈ −0.728
+- **CHSH Parameter:** S = **2.767 ± 0.044** (σ_E ≈ 0.022 per correlator)
+- **Classical bound:** S ≤ 2 (violated by **17 standard deviations**)
+- **Tsirelson limit:** 2√2 ≈ 2.828 (reached **97.8%**)
+- **Implied entanglement fidelity:** F ≥ S/(2√2) ≈ **0.978**
+
+---
+
+### 3. CHSH Inequality Test (Validation)
+- **Job ID:** `d6dhhkvg4t5c7386n00g`
+- **Purpose:** Independent validation of CHSH result
+- **Result:** Confirmed
+
+---
+
+## Hardware Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Processor | IBM ibm_fez (Heron r2) |
+| Physical qubits | 156 |
+| Native gate set | {CZ, ID, RZ, SX, X} |
+| T1 coherence time | ~150–350 µs |
+| Single-qubit gate error | ~0.08% |
+| Two-qubit CZ error | ~0.4% |
+| Logical qubits (QBN) | 10 |
+| Post-transpilation depth | 44 layers |
