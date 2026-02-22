@@ -1,0 +1,130 @@
+# ============================================================
+# Arm 4 — Doubly Robust AIPW (Linear + SuperLearner)
+# ============================================================
+# Two sub-arms:
+#   DRLin : DR with linear library (logistic regression)
+#   DRSL  : DR with SuperLearner (Random Forest + Gradient Boosting)
+# Dataset: MEPS 2008–2019 (N = 84,653 person-years)
+# ============================================================
+
+library(AIPW)
+library(SuperLearner)
+library(survival)
+library(dplyr)
+
+set.seed(2026)
+
+# ── Load data ─────────────────────────────────────────────────
+meps <- readRDS("../data/meps_cleaned.rds")
+
+A <- meps$treatment
+Y <- meps$bd2_conversion
+W <- meps %>% select(age, sex, family_history, risk_score,
+                     anxiety, comorbidity, year) %>% as.data.frame()
+
+# ═══════════════════════════════════════════════════════════════
+# Sub-arm DRLin: Linear library (logistic regression only)
+# ═══════════════════════════════════════════════════════════════
+sl_lib_linear <- c("SL.glm")
+
+aipw_linear <- AIPW$new(
+  Y = Y,
+  A = A,
+  W = W,
+  Q.SL.library = sl_lib_linear,
+  g.SL.library = sl_lib_linear,
+  k_split = 10,
+  verbose = TRUE
+)
+aipw_linear$fit()
+aipw_linear$summary(g.bound = 0.025)
+
+# Extract ATT and convert to HR
+att_lin   <- aipw_linear$result["ATT", "Estimate"]
+se_lin    <- aipw_linear$result["ATT", "SE"]
+ci_lin    <- att_lin + c(-1.96, 1.96) * se_lin
+
+baseline  <- mean(Y[A == 0])
+hr_lin    <- (baseline + att_lin) / baseline
+ci_hr_lin <- (baseline + ci_lin) / baseline
+
+cat(sprintf("\nDR-Linear  HR = %.3f (95%% CI: %.3f–%.3f)\n",
+            hr_lin, ci_hr_lin[1], ci_hr_lin[2]))
+# Paper reports: HR = 0.59 (0.49–0.71)
+
+# ═══════════════════════════════════════════════════════════════
+# Sub-arm DRSL: SuperLearner ensemble
+# ═══════════════════════════════════════════════════════════════
+sl_lib_ensemble <- c(
+  "SL.glm",
+  "SL.ranger",          # Random Forest
+  "SL.xgboost"          # Gradient Boosting
+)
+
+aipw_sl <- AIPW$new(
+  Y = Y,
+  A = A,
+  W = W,
+  Q.SL.library = sl_lib_ensemble,
+  g.SL.library = sl_lib_ensemble,
+  k_split = 10,
+  verbose = TRUE
+)
+aipw_sl$fit()
+aipw_sl$summary(g.bound = 0.025)
+
+att_sl   <- aipw_sl$result["ATT", "Estimate"]
+se_sl    <- aipw_sl$result["ATT", "SE"]
+ci_sl    <- att_sl + c(-1.96, 1.96) * se_sl
+
+hr_sl    <- (baseline + att_sl) / baseline
+ci_hr_sl <- (baseline + ci_sl) / baseline
+
+cat(sprintf("DR-SuperLearner  HR = %.3f (95%% CI: %.3f–%.3f)\n",
+            hr_sl, ci_hr_sl[1], ci_hr_sl[2]))
+# Paper reports: HR = 0.56 (0.47–0.67)
+
+# ── Dose-Response Analysis ────────────────────────────────────
+meps_dose <- meps %>%
+  mutate(dose_cat = case_when(
+    n_sessions == 0         ~ "None",
+    between(n_sessions,4,6) ~ "Low (4–6)",
+    between(n_sessions,7,9) ~ "Medium (7–9)",
+    n_sessions >= 10        ~ "High (≥10)"
+  ))
+
+cox_dose <- coxph(
+  Surv(follow_up_years, bd2_conversion) ~
+    relevel(factor(dose_cat), ref = "None") +
+    age + sex + family_history + risk_score + anxiety + comorbidity,
+  data = meps_dose
+)
+summary(cox_dose)
+# Paper reports: Low HR=0.72, Medium HR=0.61, High HR=0.49, p_trend<0.001
+
+# ── Negative Control Outcomes ─────────────────────────────────
+negative_controls <- c("t2_diabetes", "hypertension", "osteoarthritis", "cataracts")
+
+nc_results <- lapply(negative_controls, function(nc) {
+  cox_nc <- coxph(
+    as.formula(paste0("Surv(follow_up_years, ", nc, ") ~ treatment +
+      age + sex + family_history + risk_score + anxiety + comorbidity")),
+    data = meps
+  )
+  tibble(
+    outcome = nc,
+    hr = exp(coef(cox_nc)["treatment"]),
+    p  = summary(cox_nc)$coefficients["treatment", "Pr(>|z|)"]
+  )
+})
+nc_table <- bind_rows(nc_results)
+print(nc_table)
+# Paper reports: all HR ~1.00, all p > 0.05
+
+# ── Save results ─────────────────────────────────────────────
+results_dr <- list(
+  hr_linear = hr_lin, ci_hr_linear = ci_hr_lin,
+  hr_sl     = hr_sl,  ci_hr_sl     = ci_hr_sl,
+  nc_table  = nc_table
+)
+saveRDS(results_dr, "../results/arm4_dr_results.rds")
