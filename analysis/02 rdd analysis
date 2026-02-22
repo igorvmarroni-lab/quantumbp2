@@ -1,0 +1,107 @@
+# ============================================================
+# Arm 2 — Regression Discontinuity Design (RDD)
+# ============================================================
+# Running variable: composite clinical risk score (0–10)
+# Cutoff: risk score ≥ 6 triggers referral to intervention
+# McCrary density test p = 0.67 (no manipulation at cutoff)
+# Dataset: MEPS (N = 18,234 near cutoff)
+# ============================================================
+
+library(rdrobust)
+library(rddensity)
+library(survival)
+library(dplyr)
+library(ggplot2)
+
+# ── Load data ────────────────────────────────────────────────
+meps <- readRDS("../data/meps_cleaned.rds")
+CUTOFF <- 6
+
+# ── McCrary Density Test (manipulation check) ─────────────────
+density_test <- rddensity(X = meps$risk_score, c = CUTOFF)
+summary(density_test)
+# Paper reports: p = 0.67 (no evidence of manipulation)
+
+# ── Main RDD Estimate ─────────────────────────────────────────
+rdd_main <- rdrobust(
+  y = meps$bd2_conversion,
+  x = meps$risk_score,
+  c = CUTOFF,
+  kernel = "triangular",
+  bwselect = "mserd"   # MSE-optimal bandwidth
+)
+summary(rdd_main)
+
+# ── Covariate-Adjusted RDD ────────────────────────────────────
+covs <- meps %>%
+  select(age, sex, family_history, anxiety, comorbidity) %>%
+  as.matrix()
+
+rdd_adj <- rdrobust(
+  y    = meps$bd2_conversion,
+  x    = meps$risk_score,
+  c    = CUTOFF,
+  covs = covs,
+  kernel = "triangular",
+  bwselect = "mserd"
+)
+summary(rdd_adj)
+
+# ── Survival framing: HR from local linear Cox ────────────────
+bw <- rdd_main$bws["h", "left"]  # optimal bandwidth
+
+meps_rdd <- meps %>%
+  filter(abs(risk_score - CUTOFF) <= bw) %>%
+  mutate(
+    above_cutoff = as.integer(risk_score >= CUTOFF),
+    dist_from_cutoff = risk_score - CUTOFF
+  )
+
+cox_rdd <- coxph(
+  Surv(follow_up_years, bd2_conversion) ~
+    above_cutoff * dist_from_cutoff +
+    age + sex + family_history + anxiety + comorbidity,
+  data = meps_rdd
+)
+
+hr_rdd <- exp(coef(cox_rdd)["above_cutoff"])
+ci_rdd <- exp(confint(cox_rdd)["above_cutoff", ])
+
+cat(sprintf("\nRDD Hazard Ratio: %.3f (95%% CI: %.3f–%.3f)\n",
+            hr_rdd, ci_rdd[1], ci_rdd[2]))
+# Paper reports: HR = 0.52 (0.38–0.71)
+
+# ── Robustness: bandwidth sensitivity ─────────────────────────
+bw_multipliers <- c(0.5, 0.75, 1.0, 1.25, 1.5)
+bw_results <- lapply(bw_multipliers, function(mult) {
+  rdd_bw <- rdrobust(meps$bd2_conversion, meps$risk_score,
+                     c = CUTOFF, h = bw * mult)
+  data.frame(bw_mult = mult, est = rdd_bw$coef[1], se = rdd_bw$se[1])
+})
+bw_sensitivity <- do.call(rbind, bw_results)
+print(bw_sensitivity)
+
+# ── Plot: RDD discontinuity ────────────────────────────────────
+p <- ggplot(meps %>% filter(abs(risk_score - CUTOFF) <= 3),
+       aes(x = risk_score, y = bd2_conversion)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  geom_smooth(data = . %>% filter(risk_score < CUTOFF),
+              method = "lm", se = TRUE, color = "#2196F3") +
+  geom_smooth(data = . %>% filter(risk_score >= CUTOFF),
+              method = "lm", se = TRUE, color = "#F44336") +
+  geom_vline(xintercept = CUTOFF, linetype = "dashed") +
+  labs(title = "Regression Discontinuity: BD-II Conversion at Risk Score Cutoff",
+       x = "Clinical Risk Score", y = "BD-II Conversion") +
+  theme_minimal()
+
+ggsave("../results/figures/rdd_plot.png", p, width = 8, height = 5, dpi = 300)
+
+# ── Save results ─────────────────────────────────────────────
+results_rdd <- list(
+  hr         = hr_rdd,
+  ci         = ci_rdd,
+  bandwidth  = bw,
+  mccrary_p  = density_test$test$p_value,
+  sensitivity = bw_sensitivity
+)
+saveRDS(results_rdd, "../results/arm2_rdd_results.rds")
