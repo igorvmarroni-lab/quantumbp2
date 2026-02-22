@@ -1,0 +1,87 @@
+# ============================================================
+# Arm 3 — Stepped-Wedge Difference-in-Differences
+# ============================================================
+# Treatment: staggered mental health parity law rollout (2008–2019)
+# Estimator: Callaway–Sant'Anna (2021) — robust to heterogeneous effects
+# Pre-trend F-test: p = 0.34 (parallel trends not rejected)
+# Dataset: MEPS 2008–2019 (N = 84,653 person-years)
+# ============================================================
+
+library(did)         # Callaway-Sant'Anna estimator
+library(survival)
+library(dplyr)
+library(ggplot2)
+
+# ── Load data ────────────────────────────────────────────────
+meps <- readRDS("../data/meps_cleaned.rds")
+
+# meps must contain:
+#   id          : individual identifier
+#   year        : calendar year (2008–2019)
+#   state       : U.S. state code
+#   parity_year : year state adopted mental health parity law (0 if not yet)
+#   treatment   : 1 if received behavioral intervention
+#   bd2_conversion : outcome
+#   covariates  : age, sex, family_history, risk_score, anxiety, comorbidity
+
+# ── Callaway–Sant'Anna DiD ────────────────────────────────────
+cs_did <- att_gt(
+  yname         = "bd2_conversion",
+  tname         = "year",
+  idname        = "id",
+  gname         = "parity_year",       # cohort = year law was adopted
+  xformla       = ~ age + sex + family_history + risk_score + anxiety + comorbidity,
+  data          = meps,
+  est_method    = "dr",                # doubly robust
+  control_group = "notyettreated"      # use not-yet-treated as controls
+)
+
+summary(cs_did)
+
+# ── Aggregate: simple ATT ─────────────────────────────────────
+agg_simple <- aggte(cs_did, type = "simple")
+cat(sprintf("\nCallaway–Sant'Anna ATT: %.4f (SE: %.4f)\n",
+            agg_simple$overall.att, agg_simple$overall.se))
+
+# ── Pre-trend test (event study) ─────────────────────────────
+agg_dynamic <- aggte(cs_did, type = "dynamic")
+summary(agg_dynamic)
+
+# Pre-period F-test (periods < 0)
+pre_periods <- agg_dynamic$egt < 0
+pre_ests    <- agg_dynamic$att.egt[pre_periods]
+pre_ses     <- agg_dynamic$se.egt[pre_periods]
+f_stat      <- sum((pre_ests / pre_ses)^2) / sum(pre_periods)
+f_pval      <- pf(f_stat, sum(pre_periods), Inf, lower.tail = FALSE)
+cat(sprintf("Pre-trend F-test: F = %.3f, p = %.3f\n", f_stat, f_pval))
+# Paper reports: p = 0.34
+
+# ── Convert ATT to Hazard Ratio ───────────────────────────────
+# Baseline conversion rate among untreated
+baseline_rate <- meps %>%
+  filter(treatment == 0) %>%
+  summarise(rate = mean(bd2_conversion)) %>%
+  pull(rate)
+
+hr_sw <- (baseline_rate + agg_simple$overall.att) / baseline_rate
+cat(sprintf("Stepped-Wedge HR ≈ %.3f\n", hr_sw))
+# Paper reports: HR = 0.61 (0.48–0.78)
+
+# ── Event study plot ─────────────────────────────────────────
+gg_did <- ggdid(agg_dynamic) +
+  labs(title = "Event Study: Mental Health Parity Laws and BD-II Conversion",
+       x = "Years Relative to Law Adoption",
+       y = "ATT (BD-II Conversion)") +
+  theme_minimal()
+
+ggsave("../results/figures/event_study_sw.png", gg_did, width = 9, height = 5, dpi = 300)
+
+# ── Save results ─────────────────────────────────────────────
+results_sw <- list(
+  att       = agg_simple$overall.att,
+  att_se    = agg_simple$overall.se,
+  hr        = hr_sw,
+  pretrend_p = f_pval,
+  cs_obj    = cs_did
+)
+saveRDS(results_sw, "../results/arm3_sw_results.rds")
