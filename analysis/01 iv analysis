@@ -1,0 +1,67 @@
+# ============================================================
+# Arm 1 — Instrumental Variable (IV) Analysis
+# ============================================================
+# Instrument: geographic distance to nearest specialized BD clinic
+# F-statistic: 42.3 (strong instrument)
+# Dataset: MEPS 2008–2019 (N = 84,653 person-years)
+# ============================================================
+
+library(ivreg)
+library(sandwich)
+library(lmtest)
+library(survival)
+library(dplyr)
+
+# ── Load data ────────────────────────────────────────────────
+meps <- readRDS("../data/meps_cleaned.rds")
+
+# ── First Stage: Treatment ~ Instrument + Covariates ─────────
+first_stage <- lm(
+  treatment ~ distance_bd_clinic + age + sex + family_history +
+    risk_score + anxiety + comorbidity + year,
+  data = meps
+)
+
+# F-statistic for instrument strength
+fstat <- summary(first_stage)$fstatistic
+cat(sprintf("First-stage F-statistic: %.1f\n", fstat[1]))
+# Paper reports: 42.3 (strong instrument threshold > 10)
+
+# ── Two-Stage Least Squares (2SLS) ───────────────────────────
+iv_model <- ivreg(
+  bd2_conversion ~ treatment + age + sex + family_history +
+    risk_score + anxiety + comorbidity + year |
+    distance_bd_clinic + age + sex + family_history +
+    risk_score + anxiety + comorbidity + year,
+  data = meps
+)
+
+# Robust standard errors
+iv_robust <- coeftest(iv_model, vcov = vcovHC(iv_model, type = "HC1"))
+print(iv_robust)
+
+# ── Survival analysis framing (HR via Cox-IV) ─────────────────
+# Predicted treatment from first stage
+meps$treatment_hat <- predict(first_stage, meps)
+
+cox_iv <- coxph(
+  Surv(follow_up_years, bd2_conversion) ~ treatment_hat +
+    age + sex + family_history + risk_score + anxiety + comorbidity,
+  data = meps
+)
+
+hr_iv  <- exp(coef(cox_iv)["treatment_hat"])
+ci_iv  <- exp(confint(cox_iv)["treatment_hat", ])
+
+cat(sprintf("\nIV Hazard Ratio: %.3f (95%% CI: %.3f–%.3f)\n",
+            hr_iv, ci_iv[1], ci_iv[2]))
+# Paper reports: HR = 0.58 (0.44–0.77)
+
+# ── Save results ─────────────────────────────────────────────
+results_iv <- list(
+  fstat = fstat[1],
+  hr    = hr_iv,
+  ci    = ci_iv,
+  model = cox_iv
+)
+saveRDS(results_iv, "../results/arm1_iv_results.rds")
