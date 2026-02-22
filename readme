@@ -1,0 +1,144 @@
+# Quantum Bayesian Networks for Bipolar II Disorder Prevention
+
+**Structural Correspondence Between Entangled Quantum Circuits and Non-Parametric Causal Estimators: An Empirical Demonstration in Bipolar II Disorder Prevention with IBM Quantum Hardware Validation**
+
+**Author:** Igor Villela Marroni  
+**Affiliation:** Independent Researcher, Pelotas, Rio Grande do Sul, Brazil  
+**Contact:** igorvmarroni@gmail.com
+
+---
+
+> ⚠️ **CRITICAL LIMITATION:** This is NOT a randomized controlled trial. Causal claims rest on untestable assumptions inherent to quasi-experimental designs. These findings justify—but do not replace—confirmatory randomized trials before widespread implementation.
+
+---
+
+## Overview
+
+This repository contains all code, data access scripts, and reproducibility materials for the study investigating early behavioral intervention during major depressive episodes (MDE) in first-degree relatives of BD-II patients.
+
+**Key findings:**
+- Triangulated HR = 0.57 (95% CI: 0.48–0.67; I² = 16%), NNT = 9.3 (7.1–13.2)
+- First empirical validation on real NISQ hardware that quantum entanglement functions as the circuit-level analog of non-parametric interaction modeling
+- Entangled QBN degraded gracefully under DAG misspecification (+2.1%) vs. SuperLearner (+14.3%)
+
+---
+
+## Repository Structure
+
+```
+quantumtop/
+├── README.md
+├── LICENSE
+├── requirements.txt
+├── data/
+│   ├── README_data.md          # Data access instructions (NHANES, MEPS)
+│   └── codebook.md             # Variable definitions
+├── quantum/
+│   ├── qbn_entangled.py        # Entangled QBN circuit (IBM Quantum)
+│   ├── qbn_product.py          # Product-state QBN circuit (control arm)
+│   ├── bell_state_cert.py      # Bell state hardware certification
+│   ├── chsh_test.py            # CHSH inequality test
+│   └── ibm_jobs.md             # Publicly verifiable IBM Quantum job IDs
+├── analysis/
+│   ├── 01_iv_analysis.R        # Instrumental Variable (Arm 1)
+│   ├── 02_rdd_analysis.R       # Regression Discontinuity (Arm 2)
+│   ├── 03_stepped_wedge.R      # Stepped-Wedge DiD (Arm 3)
+│   ├── 04_doubly_robust.R      # Doubly Robust AIPW (Arm 4)
+│   └── 05_meta_triangulation.R # Fixed-effects meta-analysis
+├── results/
+│   ├── figures/
+│   └── tables/
+└── docs/
+    └── preregistration.md      # Pre-registration of isomorphism hypothesis
+```
+
+---
+
+## Data Sources
+
+All data are publicly available:
+
+| Dataset | Source | Period | N |
+|---------|--------|--------|---|
+| NHANES | https://www.cdc.gov/nchs/nhanes/ | 2011–2020 | 8,965 |
+| MEPS | https://meps.ahrq.gov/ | 2008–2019 | 84,653 person-years |
+
+See [`data/README_data.md`](data/README_data.md) for download and preprocessing instructions.
+
+---
+
+## Quantum Hardware Certification
+
+All quantum jobs were executed on **IBM Quantum (ibm_fez, Heron r2, 156 qubits)** on February 22, 2026, and are publicly verifiable:
+
+| Test | Job ID | Result |
+|------|--------|--------|
+| Bell State Preparation | `d6dhdocnsg9c739bcri0` | Fidelity F ≈ 0.982 |
+| CHSH Primary | `d6dhj3h54hss73b9otqg` | S = 2.767 ± 0.044 (17σ above classical bound) |
+| CHSH Validation | `d6dhhkvg4t5c7386n00g` | Confirmed |
+
+> CHSH S = 2.767 exceeds the classical bound (S ≤ 2) by 17 standard deviations and reaches 97.8% of the Tsirelson limit (2√2 ≈ 2.828).
+
+---
+
+## Five-Arm Identification Design
+
+| Arm | Method | HR | 95% CI |
+|-----|--------|----|--------|
+| 1 | Instrumental Variable | 0.58 | 0.44–0.77 |
+| 2 | Regression Discontinuity | 0.52 | 0.38–0.71 |
+| 3 | Stepped-Wedge DiD | 0.61 | 0.48–0.78 |
+| 4 | Doubly Robust – Linear | 0.59 | 0.49–0.71 |
+| 5 | Doubly Robust – SuperLearner | 0.56 | 0.47–0.67 |
+| Q1 | Entangled QBN | 0.568 | 0.47–0.68 |
+| Q2 | Product-State QBN (control) | 0.61 | 0.50–0.74 |
+| **—** | **Triangulated Estimate** | **0.57** | **0.48–0.67** |
+
+---
+
+## Requirements
+
+### Python (Quantum arm)
+```
+pip install -r requirements.txt
+```
+
+### R (Classical arms)
+```r
+install.packages(c("ivreg", "rdrobust", "did", "AIPW", "SuperLearner", "meta"))
+```
+
+---
+
+## Reproducibility
+
+1. Download NHANES and MEPS datasets (see `data/README_data.md`)
+2. Run preprocessing scripts in `data/`
+3. Run classical arms in `analysis/` (R scripts, numbered in order)
+4. Run quantum arm in `quantum/` (requires IBM Quantum account)
+5. Run `analysis/05_meta_triangulation.R` for final triangulated estimate
+
+---
+
+## Citation
+
+```bibtex
+@article{marroni2026quantum,
+  title   = {Structural Correspondence Between Entangled Quantum Circuits and Non-Parametric Causal Estimators: An Empirical Demonstration in Bipolar II Disorder Prevention with IBM Quantum Hardware Validation},
+  author  = {Marroni, Igor Villela},
+  year    = {2026},
+  note    = {Independent Researcher, Pelotas, Rio Grande do Sul, Brazil}
+}
+```
+
+---
+
+## License
+
+MIT License. See [`LICENSE`](LICENSE) for details.
+
+---
+
+## Competing Interests & Funding
+
+The author declares no competing interests. This research received no specific grant from any funding agency.
